@@ -2,7 +2,7 @@ crewai
 crewai-tools
 ollama
 litellm
-duckduckgo-search
+ddgs  # DuckDuckGo search (renamed successor of duckduckgo-search)
 youtube-transcript-api
 pydantic
 fastapi

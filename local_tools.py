@@ -14,7 +14,13 @@ No API keys are required for any of these tools.
 import re
 
 from crewai.tools import BaseTool
-from duckduckgo_search import DDGS
+
+# ``duckduckgo_search`` was renamed to ``ddgs``; prefer the new package and
+# fall back to the old one if it is what's installed.
+try:
+    from ddgs import DDGS
+except ImportError:  # pragma: no cover - legacy package name
+    from duckduckgo_search import DDGS
 
 
 class DuckDuckGoSearchTool(BaseTool):
@@ -28,7 +34,12 @@ class DuckDuckGoSearchTool(BaseTool):
 
     max_results: int = 5
 
-    def _run(self, query: str) -> str:
+    def _run(self, query: str = "", **kwargs) -> str:
+        # Tolerate small local models that emit nested/odd tool arguments.
+        if not query:
+            query = kwargs.get("query") or kwargs.get("input") or kwargs.get("text") or ""
+        if not query:
+            return "No search query provided."
         try:
             results = list(DDGS().text(query, max_results=self.max_results))
         except Exception as exc:  # pragma: no cover - network errors
