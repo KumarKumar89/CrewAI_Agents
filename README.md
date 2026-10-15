@@ -1,6 +1,6 @@
 Step 1 (Generation): I have prepared the comprehensive README content for your CrewAI project based on your presentation slide deck.
 
-# Build Agents with CrewAI - Day 5 Tutorial
+# Build Agents with CrewAI - 
 
 Welcome to the learning guide and tutorial for building intelligent, role-playing AI agents using **CrewAI**. This guide covers everything from core components to advanced custom LLM wrappers and web search integration.
 
