@@ -1,4 +1,3 @@
-Step 1 (Generation): I have prepared the comprehensive README content for your CrewAI project based on your presentation slide deck.
 
 # Build Agents with CrewAI - 
 
