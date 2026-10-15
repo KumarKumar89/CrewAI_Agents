@@ -1,0 +1,9 @@
+crewai
+crewai-tools
+ollama
+litellm
+duckduckgo-search
+youtube-transcript-api
+pydantic
+fastapi
+uvicorn[standard]
