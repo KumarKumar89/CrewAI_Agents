@@ -1,17 +1,19 @@
+# Build Agents with CrewAI — Fully Local (No API Keys)
 
-# Build Agents with CrewAI - 
-
-Welcome to the learning guide and tutorial for building intelligent, role-playing AI agents using **CrewAI**. This guide covers everything from core components to advanced custom LLM wrappers and web search integration.
+Welcome to the learning guide and tutorial for building intelligent, role-playing AI agents using **CrewAI** — running **entirely locally** with [Ollama](https://ollama.com) + **Llama 3.1**, a keyless **DuckDuckGo search tool**, and the **YouTube Transcript API**. No Gemini keys, no Exa keys, no OpenAI embeddings required.
 
 ## Table of Contents
 
 * What is CrewAI?
-* CrewAI Core Components
+* Why Local?
 * Setup & LLM Configuration
 * Defining Agents and Tasks
 * Assembling & Running a Crew
 * Agent Reasoning
-* Tools & Custom LLMs
+* Tools (DuckDuckGo Search & YouTube Transcripts)
+* FastAPI Server
+* Notebooks
+* Troubleshooting
 
 ---
 
@@ -21,49 +23,52 @@ CrewAI is a Python framework designed for orchestrating role-playing AI agents t
 
 * **Role-Based Agents:** Each agent features a distinct role, goal, and backstory, making collaboration contextual and natural.
 * **Task-Driven Pipeline:** Tasks clearly define what needs to be done, expected outputs, and responsible agents.
-* **Flexible LLM Backend:** Plug in any model via LiteLLM, including Gemini, GPT-4, Claude, Groq, and local models.
-* **Tool Ecosystem:** Equip agents with built-in tools (such as Exa or Serper) or custom `BaseTool` subclasses.
+* **Flexible LLM Backend:** Plug in any model via LiteLLM — here we use **local models** served by Ollama.
+* **Tool Ecosystem:** Equip agents with built-in tools or custom `BaseTool` subclasses (see `local_tools.py`).
 
 ---
 
-## CrewAI Core Components
+## Why Local?
 
-Four primary classes form the foundation of any CrewAI project:
+The original examples used Gemini models, Exa semantic search, and Gemini video understanding — all requiring paid/external API keys. This repository has been converted to a **keyless, local workflow**:
 
-| Component | Description |
+| Original (API-based) | Replacement (Local / keyless) |
 | --- | --- |
-| **LLM** | Wraps any LiteLLM-compatible model using a model string and API key. |
-| **Agent** | The worker bee defined by a role, goal, backstory, LLM, tools, and reasoning flags. |
-| **Task** | The unit of work detailing description, expected output, assigned agent, and markdown flags. |
-| **Crew** | Binds agents and tasks together; `crew.kickoff()` initiates execution. |
+| `gemini/gemini-2.5-flash-lite` etc. | `ollama/llama3.1` via Ollama |
+| `EXASearchTool` (Exa API key) | `DuckDuckGoSearchTool` (no key) |
+| Gemini Google Search grounding (custom LLM) | `DuckDuckGoSearchTool` (no key) |
+| Gemini `video/*` summarization (`google-genai`) | `youtube-transcript-api` + local Llama 3.1 |
+| Default CrewAI memory (OpenAI embeddings) | `memory=False` on every crew |
+
+All embedded API keys have been removed from the notebooks.
 
 ---
 
 ## Setup & LLM Configuration
 
-```python
+```bash
 # 1. Install dependencies
-pip install crewai crewai-tools exa_py google-genai
+pip install -r requirements.txt
 
-# 2. Set API keys
-import os
-os.environ['GEMINI_API_KEY'] = "your_gemini_api_key"
-os.environ['EXA_API_KEY'] = "your_exa_api_key"
+# 2. Install Ollama (https://ollama.com/download), then pull the model
+ollama pull llama3.1
 
-# 3. Create LLM wrappers
+# 3. Make sure the Ollama server is running (usually auto-started as a service)
+ollama serve
+```
+
+Then configure CrewAI's `LLM` wrapper to point at your local model — **no API key needed**:
+
+```python
 from crewai import LLM
 
-gemini_flash = LLM(
-    model="gemini/gemini-2.0-flash",
-    api_key=os.environ["GEMINI_API_KEY"]
+local_llm = LLM(
+    model="ollama/llama3.1",
+    base_url="http://localhost:11434",
 )
-
-gemini_lite = LLM(
-    model="gemini/gemini-2.5-flash-lite",
-    api_key=os.environ["GEMINI_API_KEY"]
-)
-
 ```
+
+> **Important:** Always pass `memory=False` when creating a `Crew`. Otherwise CrewAI falls back to its default embedding provider (OpenAI), which requires an external API key.
 
 ---
 
@@ -71,12 +76,14 @@ gemini_lite = LLM(
 
 ```python
 from crewai import Agent, Task
+from local_tools import DuckDuckGoSearchTool
 
 analyst = Agent(
     role="Research Specialist",
     goal="Conduct detailed research on {topic}",
     backstory="Expert at web research.",
-    llm=gemini_lite,
+    llm=local_llm,
+    tools=[DuckDuckGoSearchTool()],
     reasoning=True,
     max_reasoning_attempts=3,
     verbose=True,
@@ -88,7 +95,6 @@ analysis_task = Task(
     agent=analyst,
     verbose=True,
 )
-
 ```
 
 ---
@@ -101,6 +107,7 @@ from crewai import Crew
 crew = Crew(
     agents=[analyst],
     tasks=[analysis_task],
+    memory=False,   # avoids OpenAI embedding fallback — keeps everything local
     verbose=True,
 )
 
@@ -110,8 +117,6 @@ result = crew.kickoff(inputs={
 })
 
 print(result.raw)
-print(result.usage_metrics)
-
 ```
 
 ---
@@ -124,12 +129,98 @@ Enabling `reasoning=True` prompts the agent to reflect and plan before taking ac
 * **Reflect & Plan:** Generates an internal plan outlining necessary information and steps (similar to built-in Chain-of-Thought prompting).
 * **Execute & Return:** Executes the plan and returns the final result.
 
----
-
-## Tools & Custom LLMs
-
-Agents can leverage neural search tools like `EXASearchTool` for semantic web searches. Advanced implementations can also subclass `crewai.LLM` to inject specialized features like Gemini's Google Search grounding.
+Note: reasoning works best with capable models; Llama 3.1 handles it well locally.
 
 ---
 
-Would you like me to create this as a downloadable file or proceed with any specific uploads?
+## Tools
+
+`local_tools.py` provides two keyless CrewAI tools:
+
+* **`DuckDuckGoSearchTool`** — web search via the free `duckduckgo-search` package. Replaces both Exa search and Gemini Google Search grounding.
+* **`YouTubeTranscriptTool`** — fetches a video's transcript with `youtube-transcript-api` and summarizes it locally with Ollama/Llama 3.1. Replaces Gemini video summarization.
+
+```python
+from local_tools import DuckDuckGoSearchTool, YouTubeTranscriptTool
+
+print(DuckDuckGoSearchTool().run("local AI agents"))
+print(YouTubeTranscriptTool().run("https://www.youtube.com/watch?v=hBEAF-pCkz4"))
+```
+
+---
+
+## FastAPI Server
+
+`app.py` exposes the local workflows as HTTP endpoints, and `run_server.py` is a Codespaces-friendly runner.
+
+### Endpoints
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/` | Service info |
+| GET | `/health` | Health check (verifies Ollama reachability) |
+| POST | `/research` | Run the DuckDuckGo + Llama 3.1 research crew |
+| POST | `/summarize-youtube` | Summarize a YouTube video locally |
+| GET | `/docs` | Swagger UI |
+
+### Start in GitHub Codespaces
+
+```bash
+python -m pip install -r requirements.txt
+
+ollama pull llama3.1
+ollama serve
+
+python run_server.py
+```
+
+The runner:
+
+* Binds to `0.0.0.0`
+* Uses port `8000` by default (or the `PORT` environment variable)
+* Enables reload mode by default (set `RELOAD=false` to disable)
+* Makes the API available through the Codespaces forwarded port
+
+Open `/docs` for Swagger API documentation.
+
+### Example requests
+
+```bash
+curl http://localhost:8000/health
+```
+
+```bash
+curl -X POST http://localhost:8000/research \
+  -H "Content-Type: application/json" \
+  -d '{"topic":"local AI agents"}'
+```
+
+```bash
+curl -X POST http://localhost:8000/summarize-youtube \
+  -H "Content-Type: application/json" \
+  -d '{"video_url":"https://www.youtube.com/watch?v=hBEAF-pCkz4"}'
+```
+
+---
+
+## Notebooks
+
+| Notebook | Purpose |
+| --- | --- |
+| `crewai_reasoning (1).ipynb` | Agent reasoning with a local LLM + DuckDuckGo search crew |
+| `gemini_search_grounding_crewai (1).ipynb` | Keyless web-search agent (Ollama + DuckDuckGo replaces Gemini grounding) |
+| `summarize_video_gemini_crewai.ipynb` | YouTube transcript + local Llama 3.1 video summaries |
+
+Run them after installing `requirements.txt` and starting Ollama.
+
+---
+
+## Troubleshooting
+
+* **`Connection error` / model calls hang** — Ollama isn't running. Start it with `ollama serve`, and verify with `curl http://localhost:11434/api/tags`.
+* **`model not found: llama3.1`** — run `ollama pull llama3.1` first.
+* **OpenAI embedding/API-key errors** — make sure every `Crew(...)` uses `memory=False`.
+* **DuckDuckGo rate limits** — reduce `max_results` or add a short delay between searches.
+* **Transcript fetch fails** — the video may have no captions/subtitles; try another video or set `language=` on `YouTubeTranscriptTool`.
+* **Slow responses** — Llama 3.1 (8B) needs ~5 GB RAM/VRAM; close other apps or use a smaller model such as `ollama/llama3.2:3b` (set `OLLAMA_MODEL`).
+* **Codespaces port not visible** — confirm the server binds to `0.0.0.0` (the default in `run_server.py`) and check the *Ports* tab for forwarded port 8000.
