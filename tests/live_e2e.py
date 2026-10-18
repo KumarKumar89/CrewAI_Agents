@@ -121,8 +121,18 @@ def research_workflow():
         raise RuntimeError(f"Research workflow returned an empty/short report: {response}")
     if "http://" not in report and "https://" not in report:
         raise RuntimeError(f"Research report contains no source URL: {report[:1000]}")
+    # This query has a known current official answer verified from python.org:
+    # Python 3.15.0 was released on 2026-10-09. Guard against an HTTP-200
+    # report that cites URLs but contradicts the retrieved current evidence.
+    lowered = report.lower()
+    if "3.15.0" not in report or "still version 3.11" in lowered:
+        raise RuntimeError(
+            "Research report failed the live source-grounding check for Python's current "
+            "release. Expected Python 3.15.0 and no stale claim that 3.11 is the latest. "
+            f"Report excerpt: {report[:1200]}"
+        )
     results["research_preview"] = report[:1600]
-    return f"HTTP {status}; report_chars={len(report)}; includes source URL(s)"
+    return f"HTTP {status}; report_chars={len(report)}; includes source URL(s) and correctly identifies Python 3.15.0"
 
 
 def youtube_workflow():
@@ -150,7 +160,61 @@ def youtube_workflow():
             failures.append(f"{video_url}: HTTP {status}, summary too short or missing")
         except Exception as exc:
             failures.append(f"{video_url}: {exc}")
-    raise RuntimeError("No candidate video completed transcript + LLM summary: " + " | ".join(failures))
+    failure_text = " | ".join(failures)
+    provider_blocked = all(
+        ("upstream service is unavailable" in failure.lower())
+        or ("blocking requests from your ip" in failure.lower())
+        for failure in failures
+    )
+    if provider_blocked:
+        results["youtube_caption_source"] = {
+            "status": "blocked_external",
+            "detail": (
+                "YouTube blocked caption requests from the GitHub-hosted runner's cloud IP. "
+                "No cookies or unconfigured proxy were used."
+            ),
+            "attempts": failures,
+        }
+
+        def live_model_summary_with_fixture_transcript():
+            # Verify the actual summarizer -> actual Llama path without pretending
+            # that a synthetic transcript proves public YouTube fetch availability.
+            import local_tools
+
+            original_fetch = local_tools.fetch_transcript
+            fixture = (
+                "This sample educational transcript explains that reliable software "
+                "research should separate observations from assumptions. It recommends "
+                "checking official primary sources, recording dates and version numbers, "
+                "and explicitly stating uncertainty when sources conflict. The speaker "
+                "summarizes three actions: gather evidence, cross-check claims, and cite "
+                "the exact source next to each factual statement."
+            )
+            local_tools.fetch_transcript = lambda video_url, language="en": fixture
+            try:
+                tool = local_tools.YouTubeTranscriptTool(
+                    model=os.getenv("OLLAMA_MODEL", "ollama/llama3.1"),
+                    base_url=OLLAMA_BASE,
+                )
+                summary = str(tool.run("https://youtu.be/hBEAF-pCkz4")).strip()
+                if len(summary) < 60:
+                    raise RuntimeError(f"LLM summarizer produced too little output: {summary!r}")
+                results["youtube_fixture_summary_preview"] = summary[:1200]
+                return f"real model summary generated from fixture transcript; summary_chars={len(summary)}"
+            finally:
+                local_tools.fetch_transcript = original_fetch
+
+        check(
+            "YouTube summarizer LLM stage (fixture transcript; public caption source blocked)",
+            live_model_summary_with_fixture_transcript,
+        )
+        raise RuntimeError(
+            "The public-video YouTube endpoint could not be fully verified: all candidate "
+            "caption requests were blocked by YouTube from this cloud runner. The actual LLM "
+            "summarizer stage passed with a fixture transcript; rerun from a permitted network "
+            "to verify transcript retrieval plus summary end to end. " + failure_text
+        )
+    raise RuntimeError("No candidate video completed transcript + LLM summary: " + failure_text)
 
 
 try:
