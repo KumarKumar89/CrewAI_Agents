@@ -219,10 +219,12 @@ def youtube_workflow():
 
 try:
     check("Ollama real model inference", ollama_inference)
-    check("Live DuckDuckGo tool search", direct_search)
     check("FastAPI service endpoint", service_ready)
     check("FastAPI health + Ollama connectivity", health_check)
-    check("POST /research (CrewAI + search + LLM)", research_workflow)
+    # Research makes its own live search first; run this extra direct search after
+    # it to avoid adding an unnecessary back-to-back request to the free provider.
+    check("POST /research (pre-search + CrewAI + LLM)", research_workflow)
+    check("Live DuckDuckGo tool search", direct_search)
     check("POST /summarize-youtube (transcript + LLM)", youtube_workflow)
 except Exception:
     results["overall"] = "failed"
