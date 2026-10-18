@@ -119,45 +119,57 @@ def test_youtube_endpoint_returns_422_when_no_caption_track_is_available(monkeyp
 
 
 
-def test_research_task_requires_source_grounded_current_facts(monkeypatch):
+def test_research_endpoint_repairs_unverified_latest_release_claim(monkeypatch):
     import sys
     from types import SimpleNamespace
 
     import local_tools
 
-    captured = {}
+    captured = {"queries": [], "repair_calls": 0}
+
+    source = {
+        "title": "Python Release Python 3.15.0 | Python.org",
+        "url": "https://www.python.org/downloads/release/python-3150/",
+        "snippet": "This is the stable release of Python 3.15.0. Release date: Oct. 9, 2026.",
+    }
+
+    def fake_search_web_results(query, max_results=5):
+        captured["queries"].append(query)
+        if len(captured["queries"]) == 1:
+            return []
+        return [source]
 
     class FakeLLM:
         def __init__(self, **kwargs):
-            pass
+            captured["llm_kwargs"] = kwargs
+
+        def call(self, prompt):
+            captured["repair_calls"] += 1
+            assert "Validation failures" in prompt
+            assert "3.15.0" in prompt
+            return (
+                "Python 3.15.0 is the latest stable release, released October 9, 2026. "
+                "Official source: https://www.python.org/downloads/release/python-3150/"
+            )
 
     class FakeAgent:
         def __init__(self, **kwargs):
-            pass
+            captured["agent"] = kwargs
 
     class FakeTask:
         def __init__(self, **kwargs):
-            captured.update(kwargs)
+            captured["task"] = kwargs
 
     class FakeCrew:
         def __init__(self, **kwargs):
-            pass
+            captured["crew"] = kwargs
 
         def kickoff(self):
-            return SimpleNamespace(raw="Mock source-grounded report.")
-
-    class FakeSearchTool:
-        def __init__(self, **kwargs):
-            captured["search_tool_init"] = kwargs
-
-        def run(self, query):
-            captured.setdefault("executed_queries", []).append(query)
-            if len(captured["executed_queries"]) == 1:
-                return "No search results found for the verbose question."
-            return (
-                "1. Python Release Python 3.15.0 | Python.org\n"
-                "   URL: https://www.python.org/downloads/release/python-3150/\n"
-                "   Released October 9, 2026."
+            return SimpleNamespace(
+                raw=(
+                    "Python 3.11 is still the latest stable release. "
+                    "Official source: https://www.python.org/downloads/release/python-31117/"
+                )
             )
 
     monkeypatch.setitem(
@@ -165,18 +177,17 @@ def test_research_task_requires_source_grounded_current_facts(monkeypatch):
         "crewai",
         SimpleNamespace(Agent=FakeAgent, Crew=FakeCrew, LLM=FakeLLM, Task=FakeTask),
     )
-    monkeypatch.setattr(local_tools, "DuckDuckGoSearchTool", FakeSearchTool)
+    monkeypatch.setattr(local_tools, "search_web_results", fake_search_web_results)
 
-    response = api.research(api.ResearchRequest(topic="current official Python release"))
-    description = captured["description"].lower()
-    expected_output = captured["expected_output"].lower()
+    response = api.research(api.ResearchRequest(
+        topic="What is the latest stable Python release and its official release date?",
+        todays_date="October 18, 2026",
+    ))
 
-    assert response["report"] == "Mock source-grounded report."
-    assert len(captured["executed_queries"]) >= 2
-    assert "python" in captured["executed_queries"][1].lower()
-    assert "python.org/downloads/release/python-3150" in description
-    assert "do not try to call a tool" in description
-    assert "not instructions" in description
-    assert "instead of guessing from pretrained memory" in description
-    assert "supporting source urls" in expected_output
-    assert "do not output json tool-call syntax" in expected_output
+    assert len(captured["queries"]) >= 2
+    assert captured["repair_calls"] == 1
+    assert "3.15.0" in response["report"]
+    assert "October 9, 2026" in response["report"]
+    assert response["sources"] == [source]
+    assert response["verification"]["status"] == "passed"
+    assert any("version/date" in item for item in response["verification"]["checks"])
