@@ -6,24 +6,20 @@ Endpoints:
     POST /research          -> DuckDuckGo-powered research crew (Ollama Llama 3.1)
     POST /summarize-youtube -> YouTube transcript + local Llama summary
 
-Everything runs locally with **no API keys**. Start Ollama first:
-
+Everything runs locally with no hosted LLM API keys. Start Ollama first:
     ollama pull llama3.1
     ollama serve
-
-Then run either:
-
-    uvicorn app:app --host 0.0.0.0 --port 8000
-    # or, Codespaces-friendly:
-    python run_server.py
 """
 
+import logging
 import os
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+logger = logging.getLogger(__name__)
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "ollama/llama3.1")
 
 app = FastAPI(
@@ -32,14 +28,21 @@ app = FastAPI(
         "Local, keyless CrewAI workflows powered by Ollama + Llama 3.1, "
         "DuckDuckGo search, and the YouTube Transcript API."
     ),
-    version="1.0.0",
+    version="1.0.1",
 )
 
 
 class ResearchRequest(BaseModel):
-    topic: str = Field(..., description="Topic to research", examples=["local AI agents"])
+    topic: str = Field(
+        ...,
+        min_length=1,
+        max_length=300,
+        description="Topic to research (1–300 characters)",
+        examples=["local AI agents"],
+    )
     todays_date: str = Field(
         default="",
+        max_length=40,
         description="Optional current date string for recency context",
         examples=["October 16, 2026"],
     )
@@ -48,7 +51,9 @@ class ResearchRequest(BaseModel):
 class YouTubeSummaryRequest(BaseModel):
     video_url: str = Field(
         ...,
-        description="YouTube video URL to summarize",
+        min_length=1,
+        max_length=2048,
+        description="YouTube video URL or 11-character video ID",
         examples=["https://www.youtube.com/watch?v=hBEAF-pCkz4"],
     )
 
@@ -75,22 +80,22 @@ def health():
     try:
         import httpx
 
-        resp = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-        ollama_ok = resp.status_code == 200
+        response = httpx.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+        ollama_ok = response.status_code == 200
     except Exception:
-        ollama_ok = False
+        logger.warning("Ollama health check failed for configured endpoint %s", OLLAMA_BASE_URL)
 
     return {
         "status": "ok" if ollama_ok else "degraded",
         "api": "up",
-        "ollama": "reachable" if ollama_ok else "unreachable — run `ollama serve`",
+        "ollama": "reachable" if ollama_ok else "unreachable — run ollama serve",
         "model": OLLAMA_MODEL,
     }
 
 
 @app.post("/research")
 def research(request: ResearchRequest):
-    """Run a two-agent research crew using Ollama/Llama 3.1 + DuckDuckGo."""
+    """Run a research crew using the configured Ollama model and DuckDuckGo."""
     try:
         from crewai import Agent, Crew, LLM, Task
 
@@ -114,9 +119,7 @@ def research(request: ResearchRequest):
                 + (f" as of {request.todays_date}" if request.todays_date else "")
                 + " using the web search tool."
             ),
-            expected_output=(
-                "A detailed Markdown report with key findings and sources."
-            ),
+            expected_output="A detailed Markdown report with key findings and sources.",
             agent=analyst,
         )
 
@@ -125,26 +128,34 @@ def research(request: ResearchRequest):
         return {"topic": request.topic, "report": result.raw}
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Research crew failed: {exc}")
+    except Exception:
+        # Keep internal paths, provider details, and exception text out of API responses.
+        logger.exception("Research crew execution failed")
+        raise HTTPException(
+            status_code=502,
+            detail="Research crew failed. Check server logs for diagnostic details.",
+        ) from None
 
 
 @app.post("/summarize-youtube")
 def summarize_youtube(request: YouTubeSummaryRequest):
-    """Summarize a YouTube video: transcript fetch + local Llama 3.1."""
+    """Summarize a YouTube video: transcript fetch + local Ollama model."""
     try:
         from local_tools import YouTubeTranscriptTool
 
-        # OLLAMA_MODEL is already LiteLLM-namespaced (e.g. "ollama/llama3.1").
-        tool = YouTubeTranscriptTool(model=OLLAMA_MODEL)
+        tool = YouTubeTranscriptTool(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
         summary = tool.run(request.video_url)
         if summary.startswith("Could not fetch transcript"):
             raise HTTPException(status_code=422, detail=summary)
         return {"video_url": request.video_url, "summary": summary}
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"YouTube summary failed: {exc}")
+    except Exception:
+        logger.exception("YouTube summary execution failed")
+        raise HTTPException(
+            status_code=502,
+            detail="YouTube summarization failed. Check server logs for diagnostic details.",
+        ) from None
 
 
 if __name__ == "__main__":
