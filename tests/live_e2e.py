@@ -110,8 +110,8 @@ def health_check():
 def research_workflow():
     payload = {
         "topic": (
-            "Use the web search tool to research the current official Python release information. "
-            "Cite at least two source URLs and distinguish official facts from commentary."
+            "What is the latest stable Python release and its official release date? "
+            "Prefer official python.org sources and cite the URL."
         ),
         "todays_date": date.today().isoformat(),
     }
