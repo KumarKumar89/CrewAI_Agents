@@ -1,0 +1,166 @@
+"""Real-service smoke test run only in the dedicated live E2E GitHub Actions job.
+
+Requires a running Ollama server with the configured model, network access for
+DuckDuckGo and YouTube, and the FastAPI service started on localhost.
+"""
+
+import json
+import os
+import sys
+import time
+import traceback
+from datetime import date
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+RESULT_PATH = Path(os.getenv("E2E_RESULT_PATH", "live-e2e-results.json"))
+API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+MODEL_NAME = os.getenv("OLLAMA_MODEL", "ollama/llama3.1").removeprefix("ollama/")
+results = {"date": date.today().isoformat(), "model": MODEL_NAME, "checks": []}
+
+
+def check(name, fn):
+    item = {"name": name, "status": "running"}
+    results["checks"].append(item)
+    try:
+        detail = fn()
+        item.update(status="passed", detail=detail)
+        print(f"PASS: {name} — {detail}", flush=True)
+        return detail
+    except Exception as exc:
+        item.update(status="failed", error=str(exc), traceback=traceback.format_exc()[-5000:])
+        print(f"FAIL: {name} — {exc}", file=sys.stderr, flush=True)
+        raise
+    finally:
+        RESULT_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
+
+
+def json_request(url, payload=None, timeout=300):
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    request = Request(
+        url,
+        data=body,
+        headers={"Content-Type": "application/json"} if body is not None else {},
+        method="GET" if body is None else "POST",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+            return response.status, json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"HTTP {exc.code} from {url}: {raw[:1200]}") from exc
+    except (URLError, TimeoutError) as exc:
+        raise RuntimeError(f"Request to {url} failed: {exc}") from exc
+
+
+def ollama_inference():
+    status, payload = json_request(
+        f"{OLLAMA_BASE}/api/generate",
+        {"model": MODEL_NAME, "prompt": "Reply exactly with OLLAMA_READY.", "stream": False,
+         "options": {"num_predict": 24}},
+        timeout=240,
+    )
+    text = str(payload.get("response", "")).strip()
+    if status != 200 or "OLLAMA_READY" not in text:
+        raise RuntimeError(f"Unexpected Ollama generation response: {text[:400]}")
+    return f"model={MODEL_NAME}; response={text[:100]!r}"
+
+
+def direct_search():
+    from local_tools import DuckDuckGoSearchTool
+
+    text = DuckDuckGoSearchTool(max_results=3).run("Python official latest release python.org")
+    if "DuckDuckGo search failed:" in text or "No search results found" in text:
+        raise RuntimeError(text[:800])
+    if "URL: http" not in text:
+        raise RuntimeError(f"Search returned no result URLs: {text[:800]}")
+    return "DuckDuckGo returned live result URLs; " + text[:350].replace("\n", " ")
+
+
+def service_ready():
+    deadline = time.time() + 60
+    last = None
+    while time.time() < deadline:
+        try:
+            status, payload = json_request(f"{API_BASE}/")
+            if status == 200 and payload.get("service") == "CrewAI Local Agents API":
+                return f"HTTP {status}; service={payload['service']}"
+        except Exception as exc:
+            last = exc
+        time.sleep(2)
+    raise RuntimeError(f"API did not become ready within 60 seconds; last error={last}")
+
+
+def health_check():
+    status, payload = json_request(f"{API_BASE}/health", timeout=10)
+    if status != 200 or payload.get("status") != "ok" or payload.get("ollama") != "reachable":
+        raise RuntimeError(f"Health check failed: HTTP {status}, payload={payload}")
+    if payload.get("model") != os.getenv("OLLAMA_MODEL", "ollama/llama3.1"):
+        raise RuntimeError(f"API model configuration mismatch: {payload}")
+    return f"HTTP {status}; Ollama reachable; model={payload['model']}"
+
+
+def research_workflow():
+    payload = {
+        "topic": (
+            "Use the web search tool to research the current official Python release information. "
+            "Cite at least two source URLs and distinguish official facts from commentary."
+        ),
+        "todays_date": date.today().isoformat(),
+    }
+    status, response = json_request(f"{API_BASE}/research", payload, timeout=420)
+    report = str(response.get("report", "")).strip()
+    if status != 200 or len(report) < 100:
+        raise RuntimeError(f"Research workflow returned an empty/short report: {response}")
+    if "http://" not in report and "https://" not in report:
+        raise RuntimeError(f"Research report contains no source URL: {report[:1000]}")
+    results["research_preview"] = report[:1600]
+    return f"HTTP {status}; report_chars={len(report)}; includes source URL(s)"
+
+
+def youtube_workflow():
+    # Prefer the examples already documented by this repository, then a public
+    # educational video often available with captions. Caption availability is
+    # external and is treated as a required part of this end-to-end smoke test.
+    videos = [
+        "https://www.youtube.com/watch?v=hBEAF-pCkz4",
+        "https://www.youtube.com/watch?v=e-LNrKZMxOk",
+        "https://www.youtube.com/watch?v=aircAruvnKk",
+    ]
+    failures = []
+    for video_url in videos:
+        try:
+            status, response = json_request(
+                f"{API_BASE}/summarize-youtube",
+                {"video_url": video_url},
+                timeout=420,
+            )
+            summary = str(response.get("summary", "")).strip()
+            if status == 200 and len(summary) >= 60:
+                results["youtube_video_url"] = video_url
+                results["youtube_summary_preview"] = summary[:1600]
+                return f"HTTP {status}; video={video_url}; summary_chars={len(summary)}"
+            failures.append(f"{video_url}: HTTP {status}, summary too short or missing")
+        except Exception as exc:
+            failures.append(f"{video_url}: {exc}")
+    raise RuntimeError("No candidate video completed transcript + LLM summary: " + " | ".join(failures))
+
+
+try:
+    check("Ollama real model inference", ollama_inference)
+    check("Live DuckDuckGo tool search", direct_search)
+    check("FastAPI service endpoint", service_ready)
+    check("FastAPI health + Ollama connectivity", health_check)
+    check("POST /research (CrewAI + search + LLM)", research_workflow)
+    check("POST /summarize-youtube (transcript + LLM)", youtube_workflow)
+except Exception:
+    results["overall"] = "failed"
+    RESULT_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    raise
+else:
+    results["overall"] = "passed"
+    RESULT_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print("ALL LIVE E2E CHECKS PASSED", flush=True)
