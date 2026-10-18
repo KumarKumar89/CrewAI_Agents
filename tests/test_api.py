@@ -72,3 +72,47 @@ def test_youtube_endpoint_passes_configured_model_and_base_url(monkeypatch):
 def test_invalid_research_request_is_rejected_before_work_starts():
     response = client.post("/research", json={"topic": ""})
     assert response.status_code == 422
+
+
+
+def test_youtube_endpoint_returns_502_when_upstream_blocks_transcript_access(monkeypatch):
+    import local_tools
+
+    class BlockedTranscriptTool:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, video_url):
+            return (
+                "Could not fetch transcript for 'hBEAF-pCkz4': "
+                "YouTube is blocking requests from your IP."
+            )
+
+    monkeypatch.setattr(local_tools, "YouTubeTranscriptTool", BlockedTranscriptTool)
+    response = client.post(
+        "/summarize-youtube",
+        json={"video_url": "https://youtu.be/hBEAF-pCkz4"},
+    )
+
+    assert response.status_code == 502
+    assert "upstream service is unavailable" in response.json()["detail"]
+
+
+def test_youtube_endpoint_returns_422_when_no_caption_track_is_available(monkeypatch):
+    import local_tools
+
+    class NoCaptionsTool:
+        def __init__(self, **kwargs):
+            pass
+
+        def run(self, video_url):
+            return "Could not fetch transcript for 'hBEAF-pCkz4': No caption tracks are available."
+
+    monkeypatch.setattr(local_tools, "YouTubeTranscriptTool", NoCaptionsTool)
+    response = client.post(
+        "/summarize-youtube",
+        json={"video_url": "https://youtu.be/hBEAF-pCkz4"},
+    )
+
+    assert response.status_code == 422
+    assert "captions are available" in response.json()["detail"]
