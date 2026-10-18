@@ -3,6 +3,8 @@
 from types import SimpleNamespace
 
 import httpx
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app as api
@@ -191,3 +193,59 @@ def test_research_endpoint_repairs_unverified_latest_release_claim(monkeypatch):
     assert response["sources"] == [source]
     assert response["verification"]["status"] == "passed"
     assert any("release date checked" in item for item in response["verification"]["checks"])
+
+
+
+def test_research_endpoint_fails_closed_when_correction_still_is_unsupported(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import local_tools
+
+    source = {
+        "title": "Python Release Python 3.15.0 | Python.org",
+        "url": "https://www.python.org/downloads/release/python-3150/",
+        "snippet": "Stable release Python 3.15.0. Release date: Oct. 9, 2026.",
+    }
+    monkeypatch.setattr(local_tools, "search_web_results", lambda query, max_results=5: [source])
+
+    stale_report = (
+        "Python 3.11 is still the latest stable release. "
+        "Source: https://www.python.org/downloads/release/python-31117/"
+    )
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            pass
+
+        def call(self, prompt):
+            return stale_report
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            pass
+
+    class FakeTask:
+        def __init__(self, **kwargs):
+            pass
+
+    class FakeCrew:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self):
+            return SimpleNamespace(raw=stale_report)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "crewai",
+        SimpleNamespace(Agent=FakeAgent, Crew=FakeCrew, LLM=FakeLLM, Task=FakeTask),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        api.research(api.ResearchRequest(
+            topic="What is the latest stable Python release and its official release date?"
+        ))
+
+    assert exc.value.status_code == 502
+    assert "failed source/claim validation" in exc.value.detail
