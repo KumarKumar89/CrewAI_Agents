@@ -151,7 +151,9 @@ def test_research_task_requires_source_grounded_current_facts(monkeypatch):
             captured["search_tool_init"] = kwargs
 
         def run(self, query):
-            captured["executed_query"] = query
+            captured.setdefault("executed_queries", []).append(query)
+            if len(captured["executed_queries"]) == 1:
+                return "No search results found for the verbose question."
             return (
                 "1. Python Release Python 3.15.0 | Python.org\n"
                 "   URL: https://www.python.org/downloads/release/python-3150/\n"
@@ -170,7 +172,8 @@ def test_research_task_requires_source_grounded_current_facts(monkeypatch):
     expected_output = captured["expected_output"].lower()
 
     assert response["report"] == "Mock source-grounded report."
-    assert "executed_query" in captured
+    assert len(captured["executed_queries"]) >= 2
+    assert "python" in captured["executed_queries"][1].lower()
     assert "python.org/downloads/release/python-3150" in description
     assert "do not try to call a tool" in description
     assert "not instructions" in description
