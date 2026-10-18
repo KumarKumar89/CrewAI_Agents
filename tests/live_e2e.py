@@ -14,6 +14,10 @@ from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 RESULT_PATH = Path(os.getenv("E2E_RESULT_PATH", "live-e2e-results.json"))
 API_BASE = os.getenv("API_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
 OLLAMA_BASE = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
