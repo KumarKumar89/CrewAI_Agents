@@ -13,6 +13,8 @@ Everything runs locally with no hosted LLM API keys. Start Ollama first:
 
 import logging
 import os
+import re
+import time
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -110,19 +112,63 @@ def research(request: ResearchRequest):
         from local_tools import DuckDuckGoSearchTool
 
         search_tool = DuckDuckGoSearchTool(max_results=5)
-        search_query = request.topic.strip()
+        topic = request.topic.strip()
+        search_query = topic
         if request.todays_date:
-            search_query = f"{search_query} as of {request.todays_date}"
+            search_query = f"{topic} as of {request.todays_date}"
 
-        # Execute the external search tool deterministically before the LLM call.
-        search_evidence = str(search_tool.run(search_query)).strip()
-        if (
-            not search_evidence
-            or search_evidence.startswith("DuckDuckGo search failed:")
-            or search_evidence.startswith("No search results found")
-            or search_evidence == "No search query provided."
-        ):
-            logger.warning("Research retrieval did not return usable evidence")
+        # Try the original topic and a normalized keyword query. Some free search
+        # backends reject question-style queries or transiently rate-limit requests.
+        stop_words = {
+            "what", "is", "the", "and", "its", "a", "an", "to", "with", "from",
+            "in", "on", "about", "prefer", "please", "me", "tell", "show",
+        }
+        tokens = [
+            token for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9._+-]*", topic)
+            if token.casefold() not in stop_words
+        ]
+        concise_query = " ".join(tokens[:12])
+        candidate_queries = list(dict.fromkeys(
+            query for query in (
+                search_query,
+                concise_query,
+                f"{concise_query} official primary source" if concise_query else "",
+            ) if query
+        ))
+
+        search_evidence = ""
+        last_search_error = "No candidate search queries returned results."
+        for query in candidate_queries:
+            for attempt in range(2):
+                candidate = str(search_tool.run(query)).strip()
+                unusable = (
+                    not candidate
+                    or candidate.startswith("DuckDuckGo search failed:")
+                    or candidate.startswith("No search results found")
+                    or candidate == "No search query provided."
+                )
+                if not unusable:
+                    search_evidence = candidate
+                    break
+
+                last_search_error = candidate or "Empty search result."
+                logger.warning(
+                    "Research retrieval query %r attempt %d returned no usable evidence: %s",
+                    query,
+                    attempt + 1,
+                    last_search_error[:250],
+                )
+                # Retry only a provider error; empty results are handled by a
+                # shorter fallback query rather than repeating the same search.
+                if candidate.startswith("DuckDuckGo search failed:") and attempt == 0:
+                    time.sleep(0.75)
+                    continue
+                break
+            if search_evidence:
+                break
+
+        if not search_evidence:
+            logger.warning("Research retrieval exhausted fallback queries.")
             raise HTTPException(
                 status_code=502,
                 detail="Web search did not return usable evidence. Retry the request later.",
