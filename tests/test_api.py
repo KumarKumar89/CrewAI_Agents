@@ -153,8 +153,8 @@ def test_research_task_requires_source_grounded_current_facts(monkeypatch):
         def run(self, query):
             captured["executed_query"] = query
             return (
-                "1. Python Release Python 3.15.0 | Python.org\\n"
-                "   URL: https://www.python.org/downloads/release/python-3150/\\n"
+                "1. Python Release Python 3.15.0 | Python.org\n"
+                "   URL: https://www.python.org/downloads/release/python-3150/\n"
                 "   Released October 9, 2026."
             )
 
