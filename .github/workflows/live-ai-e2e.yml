@@ -1,0 +1,92 @@
+name: Live AI end-to-end verification
+
+on:
+  push:
+    branches:
+      - verify/live-ai-e2e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    name: Ollama + CrewAI + live external tools
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      OLLAMA_BASE_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: ollama/llama3.1
+      API_BASE_URL: http://127.0.0.1:8000
+      RELOAD: "false"
+      HOST: 127.0.0.1
+      PORT: "8000"
+
+    steps:
+      - name: Check out the verification branch
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh -o /tmp/ollama-install.sh
+          sh /tmp/ollama-install.sh
+
+      - name: Start Ollama and download the repository's default model
+        run: |
+          ollama serve >/tmp/ollama.log 2>&1 &
+          echo $! >/tmp/ollama.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS "$OLLAMA_BASE_URL/api/tags" >/dev/null
+          ollama pull llama3.1
+
+      - name: Install project dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Start FastAPI on localhost
+        run: |
+          python run_server.py >/tmp/crewai-api.log 2>&1 &
+          echo $! >/tmp/crewai-api.pid
+          for attempt in $(seq 1 45); do
+            if curl -fsS "$API_BASE_URL/" >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS "$API_BASE_URL/"
+
+      - name: Exercise live inference, search, research, and YouTube summary
+        run: python tests/live_e2e.py
+
+      - name: Capture service logs and E2E response summary
+        if: always()
+        run: |
+          echo "=== Ollama log (last 300 lines) ===" > /tmp/live-e2e-diagnostics.txt
+          if test -f /tmp/ollama.log; then tail -n 300 /tmp/ollama.log >> /tmp/live-e2e-diagnostics.txt; fi
+          echo >> /tmp/live-e2e-diagnostics.txt
+          echo "=== FastAPI log (last 500 lines) ===" >> /tmp/live-e2e-diagnostics.txt
+          if test -f /tmp/crewai-api.log; then tail -n 500 /tmp/crewai-api.log >> /tmp/live-e2e-diagnostics.txt; fi
+
+      - name: Upload live verification results and diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crewai-live-e2e-results
+          path: |
+            live-e2e-results.json
+            /tmp/live-e2e-diagnostics.txt
+          if-no-files-found: warn
+          retention-days: 7
