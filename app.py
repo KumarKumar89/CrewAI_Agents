@@ -15,6 +15,7 @@ import logging
 import os
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -85,12 +86,15 @@ def health():
     except Exception:
         logger.warning("Ollama health check failed for configured endpoint %s", OLLAMA_BASE_URL)
 
-    return {
+    payload = {
         "status": "ok" if ollama_ok else "degraded",
         "api": "up",
         "ollama": "reachable" if ollama_ok else "unreachable — run ollama serve",
         "model": OLLAMA_MODEL,
     }
+    # Return a failing HTTP status when the model provider is unavailable so
+    # readiness probes do not treat a degraded dependency as fully healthy.
+    return JSONResponse(status_code=200 if ollama_ok else 503, content=payload)
 
 
 @app.post("/research")
