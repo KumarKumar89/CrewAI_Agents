@@ -108,7 +108,7 @@ def is_latest_release_question(topic: str) -> bool:
     asks_current = bool(re.search(
         r"\b(latest|newest|current|most recent|stable|up[- ]to[- ]date)\b", text
     ))
-    asks_release = bool(re.search(r"\b(version|release|released|software|python)\b", text))
+    asks_release = bool(re.search(r"\b(version|release|released)\b", text))
     return asks_current and asks_release
 
 
