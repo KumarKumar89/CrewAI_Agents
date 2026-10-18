@@ -119,6 +119,10 @@ def research_workflow():
     report = str(response.get("report", "")).strip()
     if status != 200 or len(report) < 100:
         raise RuntimeError(f"Research workflow returned an empty/short report: {response}")
+    if response.get("verification", {}).get("status") != "passed":
+        raise RuntimeError(f"Research response has no successful evidence validation: {response}")
+    if not response.get("sources"):
+        raise RuntimeError(f"Research response omitted the retrieved source evidence: {response}")
     if "http://" not in report and "https://" not in report:
         raise RuntimeError(f"Research report contains no source URL: {report[:1000]}")
     # This query has a known current official answer verified from python.org:
