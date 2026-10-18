@@ -21,6 +21,35 @@ VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 
 
+def search_web_results(query: str, max_results: int = 5) -> list[dict[str, str]]:
+    """Return normalized, structured DuckDuckGo results for downstream validation.
+
+    Invalid/non-web URLs are dropped. Network/provider exceptions are allowed
+    to propagate so callers can retry a concise query without treating errors
+    as search evidence.
+    """
+    if not isinstance(query, str) or not query.strip():
+        return []
+
+    results = list(DDGS().text(query.strip(), max_results=max_results))
+    normalized: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+    for result in results:
+        title = str(result.get("title", "")).strip()
+        url = str(result.get("href", "")).strip()
+        snippet = str(result.get("body", "")).strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            continue
+        if url in seen_urls:
+            continue
+        seen_urls.add(url)
+        normalized.append({"title": title, "url": url, "snippet": snippet})
+        if len(normalized) >= max(1, max_results):
+            break
+    return normalized
+
+
 class DuckDuckGoSearchTool(BaseTool):
     """Web search using DuckDuckGo — no API key required."""
 
@@ -38,7 +67,7 @@ class DuckDuckGoSearchTool(BaseTool):
         if not query:
             return "No search query provided."
         try:
-            results = list(DDGS().text(query, max_results=self.max_results))
+            results = search_web_results(query, max_results=self.max_results)
         except Exception as exc:  # pragma: no cover - live network failures
             return f"DuckDuckGo search failed: {exc}"
 
@@ -47,10 +76,9 @@ class DuckDuckGoSearchTool(BaseTool):
 
         lines = []
         for i, result in enumerate(results, start=1):
-            title = str(result.get("title", "")).strip()
-            href = str(result.get("href", "")).strip()
-            body = str(result.get("body", "")).strip()
-            lines.append(f"{i}. {title}\n   URL: {href}\n   {body}")
+            lines.append(
+                f"{i}. {result['title']}\n   URL: {result['url']}\n   {result['snippet']}"
+            )
         return "\n\n".join(lines)
 
 
