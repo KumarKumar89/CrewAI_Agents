@@ -190,4 +190,4 @@ def test_research_endpoint_repairs_unverified_latest_release_claim(monkeypatch):
     assert "October 9, 2026" in response["report"]
     assert response["sources"] == [source]
     assert response["verification"]["status"] == "passed"
-    assert any("version/date" in item for item in response["verification"]["checks"])
+    assert any("release date checked" in item for item in response["verification"]["checks"])
