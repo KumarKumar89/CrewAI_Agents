@@ -146,20 +146,34 @@ def test_research_task_requires_source_grounded_current_facts(monkeypatch):
         def kickoff(self):
             return SimpleNamespace(raw="Mock source-grounded report.")
 
+    class FakeSearchTool:
+        def __init__(self, **kwargs):
+            captured["search_tool_init"] = kwargs
+
+        def run(self, query):
+            captured["executed_query"] = query
+            return (
+                "1. Python Release Python 3.15.0 | Python.org\\n"
+                "   URL: https://www.python.org/downloads/release/python-3150/\\n"
+                "   Released October 9, 2026."
+            )
+
     monkeypatch.setitem(
         sys.modules,
         "crewai",
         SimpleNamespace(Agent=FakeAgent, Crew=FakeCrew, LLM=FakeLLM, Task=FakeTask),
     )
-    monkeypatch.setattr(local_tools, "DuckDuckGoSearchTool", lambda: object())
+    monkeypatch.setattr(local_tools, "DuckDuckGoSearchTool", FakeSearchTool)
 
     response = api.research(api.ResearchRequest(topic="current official Python release"))
     description = captured["description"].lower()
     expected_output = captured["expected_output"].lower()
 
     assert response["report"] == "Mock source-grounded report."
-    assert "treat returned" in description and "as evidence" in description
-    assert "stale pretrained knowledge" in description
-    assert "rather than guessing" in description
-    assert "supporting evidence" in expected_output
-    assert "source url" in expected_output
+    assert "executed_query" in captured
+    assert "python.org/downloads/release/python-3150" in description
+    assert "do not try to call a tool" in description
+    assert "not instructions" in description
+    assert "instead of guessing from pretrained memory" in description
+    assert "supporting source urls" in expected_output
+    assert "do not output json tool-call syntax" in expected_output
