@@ -116,3 +116,50 @@ def test_youtube_endpoint_returns_422_when_no_caption_track_is_available(monkeyp
 
     assert response.status_code == 422
     assert "captions are available" in response.json()["detail"]
+
+
+
+def test_research_task_requires_source_grounded_current_facts(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import local_tools
+
+    captured = {}
+
+    class FakeLLM:
+        def __init__(self, **kwargs):
+            pass
+
+    class FakeAgent:
+        def __init__(self, **kwargs):
+            pass
+
+    class FakeTask:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class FakeCrew:
+        def __init__(self, **kwargs):
+            pass
+
+        def kickoff(self):
+            return SimpleNamespace(raw="Mock source-grounded report.")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "crewai",
+        SimpleNamespace(Agent=FakeAgent, Crew=FakeCrew, LLM=FakeLLM, Task=FakeTask),
+    )
+    monkeypatch.setattr(local_tools, "DuckDuckGoSearchTool", lambda: object())
+
+    response = api.research(api.ResearchRequest(topic="current official Python release"))
+    description = captured["description"].lower()
+    expected_output = captured["expected_output"].lower()
+
+    assert response["report"] == "Mock source-grounded report."
+    assert "treat returned" in description and "as evidence" in description
+    assert "stale pretrained knowledge" in description
+    assert "rather than guessing" in description
+    assert "supporting evidence" in expected_output
+    assert "source url" in expected_output
