@@ -121,9 +121,21 @@ def research(request: ResearchRequest):
             description=(
                 f"Research and analyze recent trends about {request.topic}"
                 + (f" as of {request.todays_date}" if request.todays_date else "")
-                + " using the web search tool."
+                + ". Use the DuckDuckGo search tool before drawing conclusions. Treat returned "
+                "titles, snippets, dates, and URLs as evidence; do not substitute stale pretrained "
+                "knowledge for current retrieved facts. Prefer primary and official sources for "
+                "release/status questions. Match version numbers, dates, and status claims exactly "
+                "to the retrieved evidence. Put the source URL immediately beside each material "
+                "factual claim. Never invent URLs or claim a source supports something it does not. "
+                "If the sources are missing, insufficient, or conflicting, explicitly say the fact "
+                "could not be verified rather than guessing."
             ),
-            expected_output="A detailed Markdown report with key findings and sources.",
+            expected_output=(
+                "A detailed Markdown report with (1) a Verified Findings section, (2) for each key "
+                "claim the supporting evidence from the retrieved search results and its source URL, "
+                "(3) relevant published/release dates, and (4) a separate uncertainty/conflicts section. "
+                "Do not state unsupported current-version claims."
+            ),
             agent=analyst,
         )
 
@@ -150,7 +162,33 @@ def summarize_youtube(request: YouTubeSummaryRequest):
         tool = YouTubeTranscriptTool(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
         summary = tool.run(request.video_url)
         if summary.startswith("Could not fetch transcript"):
-            raise HTTPException(status_code=422, detail=summary)
+            lowered_error = summary.lower()
+            upstream_blocked_markers = (
+                "blocking requests from your ip",
+                "requestblocked",
+                "ipblocked",
+                "connection error",
+                "connection reset",
+                "timed out",
+                "temporarily unavailable",
+            )
+            if any(marker in lowered_error for marker in upstream_blocked_markers):
+                logger.warning("YouTube transcript provider is unavailable from this runtime")
+                raise HTTPException(
+                    status_code=502,
+                    detail=(
+                        "YouTube transcript retrieval failed because the upstream service "
+                        "is unavailable from this runtime/network. Retry from a network "
+                        "where YouTube transcript access is permitted."
+                    ),
+                )
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "No transcript could be retrieved for this video. Check the video URL "
+                    "and confirm that captions are available."
+                ),
+            )
         return {"video_url": request.video_url, "summary": summary}
     except HTTPException:
         raise
